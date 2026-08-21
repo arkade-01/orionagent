@@ -1,0 +1,28 @@
+{
+  "name": "orionscope",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Non-custodial agent that finds and reclaims unclaimed on-chain value on Base.",
+  "bin": {
+    "orionscope": "./dist/cli.js"
+  },
+  "scripts": {
+    "dev": "tsx --env-file-if-exists=.env src/cli.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.117.1",
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts"
+}
