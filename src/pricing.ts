@@ -1,5 +1,6 @@
 import type { Address } from "viem";
 import { API, MIN_PRICE_CONFIDENCE } from "./config.js";
+import { retryingFetch } from "./http.js";
 import type { PriceInfo, PriceStatus, TokenInfo } from "./types.js";
 
 interface LlamaCoin {
@@ -24,6 +25,7 @@ export async function fetchPrices(
   tokens: Address[],
   fetchImpl: typeof fetch = fetch,
 ): Promise<Map<string, PriceInfo>> {
+  const doFetch = retryingFetch(fetchImpl === fetch ? undefined : fetchImpl);
   const out = new Map<string, PriceInfo>();
   const unique = [...new Set(tokens.map((t) => t.toLowerCase()))];
   const fetchedAt = new Date().toISOString();
@@ -34,7 +36,7 @@ export async function fetchPrices(
     let coins: Record<string, LlamaCoin> = {};
     let reachable = true;
     try {
-      const res = await fetchImpl(url);
+      const res = await doFetch(url);
       if (res.ok) coins = ((await res.json()) as { coins?: Record<string, LlamaCoin> }).coins ?? {};
       else reachable = false;
     } catch {

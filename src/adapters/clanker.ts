@@ -297,7 +297,7 @@ export class ClankerAdapter implements SourceAdapter {
             `block windows could not be read` +
             (deep.discovery.failureSample ? ` (${deep.discovery.failureSample})` : "") +
             `. Currencies below that gap may be missing — this is not a full picture. ` +
-            `Retry, ideally against an RPC with a higher rate limit.`,
+            `Retrying may clear it; if the same ranges keep failing, the RPC endpoint is the limit.`,
         });
       }
       if (deep.resumedFrom !== null) {
@@ -315,6 +315,7 @@ export class ClankerAdapter implements SourceAdapter {
           "Fast scan: Clanker currencies come from the baseline set plus this wallet's own deploys. " +
           "Fees also accrue in tokens the wallet never deployed, which this pass cannot see — " +
           "rerun with --deep for the complete set.",
+        code: "clanker-fast-scan",
       });
     }
 
@@ -357,6 +358,7 @@ export class ClankerAdapter implements SourceAdapter {
           `specific deploy — the owner is a reward recipient on token(s) the clanker.world deployer ` +
           `index does not list. The amounts are real reads and fully claimable; only the originating ` +
           `token is unknown.`,
+        code: "clanker-untraced",
       });
     }
 
@@ -373,6 +375,7 @@ export class ClankerAdapter implements SourceAdapter {
         message:
           "Amounts are harvested FeeLocker balances. Fees still accruing in the pool are not " +
           "included — rerun with --include-pending to probe them.",
+          code: "clanker-harvested-only",
       });
     }
 

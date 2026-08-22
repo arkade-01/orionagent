@@ -1,5 +1,5 @@
 {
-  "name": "orionscope",
+  "name": "@orionscope/engine",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -18,7 +18,8 @@
     "test:unit": "vitest run test/unit",
     "mcp:smoke": "node scripts/mcp-smoke.mjs",
     "serve": "tsx --env-file-if-exists=.env src/server/index.ts",
-    "test:api": "vitest run test/unit/server.test.ts"
+    "test:api": "vitest run test/unit/server.test.ts",
+    "prepare": "tsc -p tsconfig.build.json"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",
@@ -35,5 +36,11 @@
     "vitest": "^2.1.0"
   },
   "main": "./dist/index.js",
-  "types": "./dist/index.d.ts"
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "CLAUDE.md",
+    "CLANKER.md"
+  ]
 }

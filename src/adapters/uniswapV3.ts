@@ -125,6 +125,7 @@ export class UniswapV3Adapter implements SourceAdapter {
         "Covers Uniswap v3 positions held directly by this address. Positions moved to a Safe, " +
         "a personal vault, or an automation contract belong to that contract and are not " +
         "included — pass those addresses with --also to scan them too.",
+      code: "uniswap-scope",
     };
 
     const tokenIds = await this.listTokenIds(ctx);

@@ -92,6 +92,70 @@ describe("discoverFeeCurrencies", () => {
     expect(onProgress).toHaveBeenLastCalledWith(5, 5, 0);
   });
 
+  it("counts only real failures in progress, not windows still pending", async () => {
+    // The bug this guards: deriving the failure count from "windows that have
+    // not succeeded yet" made the first tick report every window as failed, so
+    // a healthy scan opened by claiming 1,880 ranges were broken.
+    const ticks: [number, number, number][] = [];
+    await discoverFeeCurrencies(stubClient({}, [3]), OWNER, {
+      fromBlock: START,
+      toBlock: END,
+      retryRounds: 0,
+      concurrency: 1,
+      onProgress: (done, total, failed) => ticks.push([done, total, failed]),
+    });
+    expect(ticks[0]![2]).toBeLessThanOrEqual(1);
+    expect(ticks[ticks.length - 1]![2]).toBe(1);
+    // Never more failures than windows actually attempted.
+    for (const [done, , failed] of ticks) expect(failed).toBeLessThanOrEqual(done);
+  });
+
+  it("splits a range whose response is too large instead of failing it", async () => {
+    // Observed live: 20 of 1828 windows returned more log data than the HTTP
+    // client accepts. Retrying them unchanged fails forever — the range width
+    // is the problem — so they must be halved until the pieces fit.
+    const seen: [bigint, bigint][] = [];
+    const client = {
+      getBlockNumber: async () => END,
+      getLogs: async ({ fromBlock, toBlock }: { fromBlock: bigint; toBlock: bigint }) => {
+        seen.push([fromBlock, toBlock]);
+        // The first window is only readable once narrowed below half width.
+        const isFirst = fromBlock < START + LOG_WINDOW_BLOCKS;
+        if (isFirst && toBlock - fromBlock > LOG_WINDOW_BLOCKS / 4n) {
+          throw new Error("HTTP response body exceeded the size limit.");
+        }
+        return isFirst ? [{ args: { token: CLAWSTR } }] : [];
+      },
+    } as never;
+
+    const result = await discoverFeeCurrencies(client, OWNER, {
+      fromBlock: START,
+      toBlock: END,
+      retryRounds: 0,
+    });
+
+    expect(result.complete).toBe(true);
+    expect(result.currencies.map((c) => c.toLowerCase())).toContain(CLAWSTR.toLowerCase());
+    // It actually subdivided rather than giving up.
+    expect(seen.some(([f, t]) => t - f < LOG_WINDOW_BLOCKS - 1n)).toBe(true);
+  });
+
+  it("gives up on a too-large range rather than splitting forever", async () => {
+    const client = {
+      getBlockNumber: async () => END,
+      getLogs: async () => {
+        throw new Error("HTTP response body exceeded the size limit.");
+      },
+    } as never;
+    const result = await discoverFeeCurrencies(client, OWNER, {
+      fromBlock: START,
+      toBlock: START + LOG_WINDOW_BLOCKS - 1n,
+      retryRounds: 0,
+    });
+    expect(result.complete).toBe(false);
+    expect(result.failedWindows).toBe(1);
+  });
+
   it("does nothing when the cursor is already at the head", async () => {
     const result = await discoverFeeCurrencies(stubClient({}), OWNER, {
       fromBlock: END + 1n,

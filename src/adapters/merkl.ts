@@ -2,6 +2,7 @@ import { encodeFunctionData, getAddress, zeroAddress, type Address, type PublicC
 import { merklDistributorAbi } from "../abis/merklDistributor.js";
 import { merklTokenWrapperAbi } from "../abis/merklTokenWrapper.js";
 import { ADDRESSES, API, BASE_CHAIN_ID } from "../config.js";
+import { retryingFetch } from "../http.js";
 import { contractRead, httpRead } from "../provenance.js";
 import { loadTokenInfo } from "../tokens.js";
 import type {
@@ -86,7 +87,7 @@ export async function fetchMerklClaimables(
   fetchImpl: typeof fetch = fetch,
 ): Promise<{ claimables: MerklClaimable[]; raw: unknown; url: string }> {
   const url = rewardsUrl(owner);
-  const res = await fetchImpl(url);
+  const res = await retryingFetch(fetchImpl === fetch ? undefined : fetchImpl)(url);
   if (!res.ok) throw new Error(`Merkl API ${res.status} for ${owner}`);
   const raw = (await res.json()) as MerklChainRewards[];
 

@@ -102,10 +102,26 @@ export interface SourceError {
   message: string;
 }
 
+/**
+ * A stable identifier for notes whose wording is surface-specific.
+ *
+ * The default `message` is written for the CLI and names CLI flags. A web UI has
+ * no `--also` flag, so telling a visitor to pass one is noise at best and
+ * confusing at worst. Surfaces key off `code` to substitute their own copy, and
+ * fall back to `message` for anything they do not recognise.
+ */
+export type NoteCode =
+  | "uniswap-scope"
+  | "clanker-fast-scan"
+  | "clanker-untraced"
+  | "clanker-harvested-only"
+  | "pricing-unavailable";
+
 /** Something found but deliberately not listed as claimable (e.g. legacy Clanker). */
 export interface SourceNote {
   source: SourceId;
   message: string;
+  code?: NoteCode;
 }
 
 /**

@@ -38,6 +38,16 @@ export interface EngineOptions {
   findMoved?: boolean;
   /** Lookback for the moved-position search. Default ~11 days. */
   findMovedLookback?: bigint;
+  /**
+   * Fired as each source finishes, so a caller can show work in progress
+   * instead of a spinner. Sources run concurrently and report out of order.
+   */
+  onSourceDone?: (event: {
+    source: SourceId;
+    status: "ok" | "failed";
+    itemCount?: number;
+    message?: string;
+  }) => void;
 }
 
 export function buildAdapters(client: PublicClient, options: EngineOptions = {}): SourceAdapter[] {
@@ -72,7 +82,18 @@ export async function scanWallet(
   const notes: SourceNote[] = [];
   const items: UnclaimedItem[] = [];
 
-  const settled = await Promise.allSettled(adapters.map((a) => a.scan(ctx)));
+  const settled = await Promise.allSettled(
+    adapters.map(async (a) => {
+      try {
+        const result = await a.scan(ctx);
+        options.onSourceDone?.({ source: a.id, status: "ok", itemCount: result.items.length });
+        return result;
+      } catch (err) {
+        options.onSourceDone?.({ source: a.id, status: "failed", message: summarizeError(err) });
+        throw err;
+      }
+    }),
+  );
   settled.forEach((res, i) => {
     const adapter = adapters[i]!;
     if (res.status === "fulfilled") {
@@ -110,6 +131,7 @@ export async function scanWallet(
       message:
         `${pricingFailures} token(s) show as unpriced because the price API could not be ` +
         `reached, not because they have no price. The amounts themselves are unaffected.`,
+      code: "pricing-unavailable",
     });
   }
 

@@ -1,5 +1,6 @@
 import { getAddress, type Address } from "viem";
 import { API, BASE_CHAIN_ID } from "./config.js";
+import { retryingFetch } from "./http.js";
 
 /** Subset of the clanker.world token record we actually rely on. */
 export interface ClankerToken {
@@ -33,7 +34,9 @@ interface TokenListResponse {
 const MAX_PAGE_LIMIT = 20;
 
 async function getJson<T>(url: string, fetchImpl: typeof fetch): Promise<T> {
-  const res = await fetchImpl(url, { headers: { accept: "application/json" } });
+  const res = await retryingFetch(fetchImpl === fetch ? undefined : fetchImpl)(url, {
+    headers: { accept: "application/json" },
+  });
   if (!res.ok) throw new Error(`Clanker API ${res.status} for ${url}`);
   return (await res.json()) as T;
 }

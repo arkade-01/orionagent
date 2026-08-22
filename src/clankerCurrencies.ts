@@ -92,25 +92,85 @@ export async function discoverFeeCurrencies(
   const ok = new Array<boolean>(windows.length).fill(false);
   const currencies = new Set<string>();
   let failureSample: string | undefined;
-  let done = 0;
 
-  const runWindow = async (index: number): Promise<void> => {
-    const w = windows[index]!;
+  /**
+   * Progress is derived from these two arrays rather than counted, which three
+   * separate bugs argued for:
+   *  - counting "windows not yet succeeded" as failures made the first tick
+   *    report all 1880 as failed before any had run;
+   *  - counting raw attempts let retry rounds run the bar past 100% (2273/1880);
+   *  - incrementing a failure tally double-counted windows that failed twice.
+   * Attempted-and-not-yet-succeeded is true by construction at every instant,
+   * and falls as retries land.
+   */
+  const attempted = new Array<boolean>(windows.length).fill(false);
+  const report = () => {
+    if (!options.onProgress) return;
+    let done = 0;
+    let failing = 0;
+    for (const [i, seen] of attempted.entries()) {
+      if (!seen) continue;
+      done++;
+      if (!ok[i]) failing++;
+    }
+    options.onProgress(done, windows.length, failing);
+  };
+
+  /**
+   * A busy 10k-block range can return more log data than the HTTP client will
+   * accept ("response body exceeded the size limit"). Retrying it unchanged
+   * fails forever — the range itself is the problem — so it is halved until the
+   * pieces fit. Measured on Base: 20 of 1828 windows needed this.
+   */
+  const isTooLarge = (err: unknown): boolean => {
+    const text = String((err as Error)?.message ?? err).toLowerCase();
+    return (
+      text.includes("exceeded the size limit") ||
+      text.includes("response size") ||
+      text.includes("too many results") ||
+      text.includes("query returned more than")
+    );
+  };
+
+  const MAX_SPLIT_DEPTH = 8;
+
+  const readRange = async (from: bigint, to: bigint, depth = 0): Promise<void> => {
     try {
       const logs = await client.getLogs({
         address: ADDRESSES.clankerFeeLocker,
         event: STORE_TOKENS,
         args: { feeOwner: owner },
-        fromBlock: w.from,
-        toBlock: w.to,
+        fromBlock: from,
+        toBlock: to,
       });
       for (const log of logs) {
         const token = (log.args as { token?: Address }).token;
         if (token) currencies.add(token.toLowerCase());
       }
+    } catch (err) {
+      if (isTooLarge(err) && to > from && depth < MAX_SPLIT_DEPTH) {
+        const mid = from + (to - from) / 2n;
+        await readRange(from, mid, depth + 1);
+        await readRange(mid + 1n, to, depth + 1);
+        return;
+      }
+      throw err;
+    }
+  };
+
+  const runWindow = async (index: number): Promise<void> => {
+    const w = windows[index]!;
+    try {
+      await readRange(w.from, w.to);
       ok[index] = true;
     } catch (err) {
       failureSample ??= summarizeError(err);
+    } finally {
+      // Reported from here, not from the worker loop: reporting after
+      // `await runWindow(...)` let a dozen concurrent failures land before the
+      // first tick, and the UI showed "12 failed of 1 checked".
+      attempted[index] = true;
+      report();
     }
   };
 
@@ -122,7 +182,6 @@ export async function discoverFeeCurrencies(
           const index = queue.pop();
           if (index === undefined) return;
           await runWindow(index);
-          options.onProgress?.(++done, windows.length, ok.filter((v) => !v).length);
         }
       }),
     );
