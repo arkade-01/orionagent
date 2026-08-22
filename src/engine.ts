@@ -2,13 +2,16 @@ import { getAddress, type Address, type PublicClient } from "viem";
 import { ClankerAdapter, type ClankerAdapterOptions } from "./adapters/clanker.js";
 import { MerklAdapter } from "./adapters/merkl.js";
 import { UniswapV3Adapter } from "./adapters/uniswapV3.js";
+import { findMovedPositions } from "./adapters/uniswapV3Moved.js";
 import { BASE_CHAIN_ID } from "./config.js";
+import { summarizeError } from "./errors.js";
 import { fetchPrices, toUsdValue } from "./pricing.js";
 import type {
   ClaimTx,
   ScanContext,
   ScanReport,
   SourceAdapter,
+  UnreachableValue,
   SourceError,
   SourceId,
   SourceNote,
@@ -27,6 +30,14 @@ export interface EngineOptions {
    * callers, so without this every Merkl item is correctly reported owner-sign.
    */
   agentAddress?: Address;
+  /**
+   * Search for Uniswap positions this wallet transferred away that still owe
+   * fees. Reported as `unreachable`: real amounts, but `collect` must come from
+   * the holder, so they are never presented as claimable or counted in totals.
+   */
+  findMoved?: boolean;
+  /** Lookback for the moved-position search. Default ~11 days. */
+  findMovedLookback?: bigint;
 }
 
 export function buildAdapters(client: PublicClient, options: EngineOptions = {}): SourceAdapter[] {
@@ -71,12 +82,28 @@ export async function scanWallet(
       errors.push({
         source: adapter.id,
         stage: "scan",
-        message: (res.reason as Error)?.message ?? String(res.reason),
+        message: summarizeError(res.reason),
       });
     }
   });
 
+  // Positions this wallet moved into a contract. Real fees, but `collect` has to
+  // come from the holder, so they are reported separately and never totalled.
+  const unreachable: UnreachableValue[] = [];
+  if (options.findMoved) {
+    try {
+      const moved = await findMovedPositions(client, ctx, [owner], {
+        ...(options.findMovedLookback ? { lookbackBlocks: options.findMovedLookback } : {}),
+      });
+      unreachable.push(...moved.unreachable);
+      notes.push(...moved.notes);
+    } catch (err) {
+      errors.push({ source: "uniswap-v3", stage: "scan", message: summarizeError(err) });
+    }
+  }
+
   const pricingFailures = await priceItems(items, options.fetchImpl);
+  await priceUnreachable(unreachable, options.fetchImpl);
   if (pricingFailures > 0) {
     notes.push({
       source: "clanker",
@@ -109,7 +136,28 @@ export async function scanWallet(
     },
     errors,
     notes,
+    unreachable,
   };
+}
+
+/**
+ * Unreachable amounts get priced like any other real read — the owner deserves
+ * to know the scale of what is sitting out of reach — but they never enter
+ * `totals`, which describes only what can actually be claimed.
+ */
+async function priceUnreachable(
+  unreachable: UnreachableValue[],
+  fetchImpl?: typeof fetch,
+): Promise<void> {
+  const amounts = unreachable.flatMap((u) => u.amounts);
+  if (amounts.length === 0) return;
+  const prices = await fetchPrices(
+    amounts.map((a) => a.token.address),
+    fetchImpl ?? fetch,
+  );
+  for (const a of amounts) {
+    a.usdValue = toUsdValue(a.rawAmount, a.token, prices.get(a.token.address.toLowerCase()));
+  }
 }
 
 /**
@@ -164,12 +212,88 @@ export async function buildClaimPlan(
       errors.push({
         source: adapter.id,
         stage: "claim",
-        message: (res.reason as Error)?.message ?? String(res.reason),
+        message: summarizeError(res.reason),
       });
   });
 
   txs.sort((a, b) => Number(Boolean(b.isPrerequisite)) - Number(Boolean(a.isPrerequisite)));
   return { txs, errors };
+}
+
+/**
+ * Scan several addresses the same person controls and merge the results.
+ *
+ * A Uniswap position moved into a Safe or a personal vault is owned by that
+ * contract: `collect` must be called by it, so those fees are invisible to a
+ * scan of the human's EOA and cannot be claimed from it either. The same is true
+ * of a Clanker fee recipient that is a Safe. Rather than guess at which
+ * contracts a wallet controls — which is not decidable from chain data — the
+ * caller names them.
+ *
+ * Each item keeps its own `owner`, so a claim plan built from this report still
+ * targets the address that actually has to sign.
+ */
+export async function scanWallets(
+  client: PublicClient,
+  owners: Address[],
+  options: EngineOptions = {},
+): Promise<ScanReport> {
+  const unique = [...new Set(owners.map((o) => getAddress(o)))];
+  const primary = unique[0];
+  if (!primary) throw new Error("scanWallets needs at least one address.");
+  if (unique.length === 1) return scanWallet(client, primary, options);
+
+  // One block for every address, so the merged report is a single snapshot.
+  const blockNumber = options.blockNumber ?? (await client.getBlockNumber());
+  const reports = await Promise.all(
+    unique.map((owner) => scanWallet(client, owner, { ...options, blockNumber })),
+  );
+
+  const merged: ScanReport = {
+    owner: primary,
+    chainId: BASE_CHAIN_ID,
+    blockNumber,
+    generatedAt: new Date().toISOString(),
+    items: reports.flatMap((r) => r.items),
+    totals: { pricedUsd: 0, pricedCount: 0, unpricedCount: 0, itemCount: 0 },
+    errors: reports.flatMap((r) => r.errors),
+    unreachable: reports.flatMap((r) => r.unreachable),
+    // Notes repeat per address; keep one of each so the report stays readable.
+    notes: dedupeNotes(reports.flatMap((r) => r.notes)),
+  };
+
+  merged.notes.unshift({
+    source: "uniswap-v3",
+    message:
+      `Merged scan across ${unique.length} addresses: ${unique.join(", ")}. Each item records the ` +
+      `address that holds it, which is the one that must sign to claim it.`,
+  });
+
+  merged.items.sort((a, b) => {
+    if (a.usdValue !== null && b.usdValue !== null) return b.usdValue - a.usdValue;
+    if (a.usdValue !== null) return -1;
+    if (b.usdValue !== null) return 1;
+    return a.id.localeCompare(b.id);
+  });
+
+  const priced = merged.items.filter((i) => i.usdValue !== null);
+  merged.totals = {
+    pricedUsd: priced.reduce((sum, i) => sum + (i.usdValue ?? 0), 0),
+    pricedCount: priced.length,
+    unpricedCount: merged.items.length - priced.length,
+    itemCount: merged.items.length,
+  };
+  return merged;
+}
+
+function dedupeNotes(notes: SourceNote[]): SourceNote[] {
+  const seen = new Set<string>();
+  return notes.filter((n) => {
+    const key = `${n.source}:${n.message}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** "Auto-claimable now" vs "One-click, needs your signature". */

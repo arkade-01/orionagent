@@ -2,6 +2,8 @@ import { encodeFunctionData, getAddress, zeroAddress, type Address, type PublicC
 import { clankerFeeLockerAbi } from "../abis/clankerFeeLocker.js";
 import { clankerLpLockerAbi } from "../abis/clankerLpLocker.js";
 import { ADDRESSES, CLANKER_BASELINE_CURRENCIES } from "../config.js";
+import { discoverFeeCurrencies, type CurrencyDiscovery } from "../clankerCurrencies.js";
+import { loadCursor, saveCursor } from "../cursorCache.js";
 import { apiRewardRecipients, fetchTokensDeployedBy, isOnBase, isV4 } from "../clankerApi.js";
 import { contractRead, httpRead, staticCall } from "../provenance.js";
 import { loadTokenInfo } from "../tokens.js";
@@ -20,6 +22,17 @@ export interface ClankerAdapterOptions {
   includePending?: boolean;
   maxPages?: number;
   fetchImpl?: typeof fetch;
+  /**
+   * Walk `StoreTokens` history to find every currency this owner has ever been
+   * paid in, instead of relying on the baseline set plus token discovery. This
+   * is the only complete answer; it costs one `eth_getLogs` per 10k blocks.
+   */
+  deep?: boolean;
+  /** Parallel log requests during a deep scan. */
+  deepConcurrency?: number;
+  /** Resume from (and update) the on-disk watermark. Default true when deep. */
+  useCache?: boolean;
+  onDeepProgress?: (done: number, total: number, failed: number) => void;
 }
 
 /** A Clanker deploy the owner is a reward recipient on. */
@@ -234,6 +247,34 @@ export class ClankerAdapter implements SourceAdapter {
     }
   }
 
+  /**
+   * Full currency discovery, resumed from the cached watermark when possible.
+   * Returns the discovery alongside everything previously known for this owner,
+   * so a resumed scan still reports currencies found on earlier runs.
+   */
+  private async deepCurrencies(
+    ctx: ScanContext,
+  ): Promise<{ currencies: Address[]; discovery: CurrencyDiscovery; resumedFrom: bigint | null }> {
+    const useCache = this.options.useCache ?? true;
+    const cached = useCache ? loadCursor(ctx.owner) : null;
+    const resumedFrom = cached ? BigInt(cached.cursor) : null;
+
+    const discovery = await discoverFeeCurrencies(this.client, ctx.owner, {
+      ...(resumedFrom !== null ? { fromBlock: resumedFrom + 1n } : {}),
+      toBlock: ctx.blockNumber,
+      ...(this.options.deepConcurrency ? { concurrency: this.options.deepConcurrency } : {}),
+      ...(this.options.onDeepProgress ? { onProgress: this.options.onDeepProgress } : {}),
+    });
+
+    const known = (cached?.currencies ?? []).map((c) => getAddress(c));
+    const currencies = [...new Set([...known, ...discovery.currencies].map((c) => c.toLowerCase()))].map(
+      (c) => getAddress(c),
+    );
+
+    if (useCache) saveCursor(ctx.owner, { watermark: discovery.watermark, currencies });
+    return { currencies, discovery, resumedFrom };
+  }
+
   async scan(ctx: ScanContext): Promise<{ items: UnclaimedItem[]; notes?: SourceNote[] }> {
     const { tokens, paired, notes, apiUrl } = await this.candidateTokens(ctx);
 
@@ -243,6 +284,40 @@ export class ClankerAdapter implements SourceAdapter {
     // deploy that never shows up in any index we can query.
     const positions = await this.readPositions(ctx, tokens);
 
+    let discovered: Address[] = [];
+    if (this.options.deep) {
+      const deep = await this.deepCurrencies(ctx);
+      discovered = deep.currencies;
+
+      if (!deep.discovery.complete) {
+        notes.push({
+          source: this.id,
+          message:
+            `Deep scan INCOMPLETE: ${deep.discovery.failedWindows} of ${deep.discovery.totalWindows} ` +
+            `block windows could not be read` +
+            (deep.discovery.failureSample ? ` (${deep.discovery.failureSample})` : "") +
+            `. Currencies below that gap may be missing — this is not a full picture. ` +
+            `Retry, ideally against an RPC with a higher rate limit.`,
+        });
+      }
+      if (deep.resumedFrom !== null) {
+        notes.push({
+          source: this.id,
+          message:
+            `Deep scan resumed from cached block ${deep.resumedFrom}; history below it was ` +
+            `covered by an earlier run. Use --no-cache to rescan from the FeeLocker's deployment.`,
+        });
+      }
+    } else {
+      notes.push({
+        source: this.id,
+        message:
+          "Fast scan: Clanker currencies come from the baseline set plus this wallet's own deploys. " +
+          "Fees also accrue in tokens the wallet never deployed, which this pass cannot see — " +
+          "rerun with --deep for the complete set.",
+      });
+    }
+
     const currencies = [
       ...new Set(
         [
@@ -250,6 +325,7 @@ export class ClankerAdapter implements SourceAdapter {
           ...paired,
           ...(this.options.tokens ?? []),
           ...positions.flatMap((p) => p.currencies),
+          ...discovered,
         ].map((c) => getAddress(c).toLowerCase()),
       ),
     ].map((c) => getAddress(c));

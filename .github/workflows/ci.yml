@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build
+
+      # Unit tests need no network and must always run.
+      - run: npx vitest run test/unit
+
+      # Fork tests need a Base RPC. They self-skip without one, so a fork without
+      # the secret configured still gets a green, honest build.
+      - name: Fork tests (Base mainnet)
+        env:
+          BASE_RPC_URL: ${{ secrets.BASE_RPC_URL }}
+        run: |
+          if [ -z "$BASE_RPC_URL" ]; then
+            echo "::warning::BASE_RPC_URL not set — fork tests skipped, on-chain behaviour unverified."
+            exit 0
+          fi
+          curl -L https://foundry.paradigm.xyz | bash
+          echo "$HOME/.foundry/bin" >> "$GITHUB_PATH"
+          "$HOME/.foundry/bin/foundryup"
+          npx vitest run test/fork

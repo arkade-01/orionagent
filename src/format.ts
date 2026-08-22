@@ -23,7 +23,14 @@ export function renderReport(report: ScanReport): string {
   ];
 
   if (report.items.length === 0) {
-    out.push("No unclaimed value found.");
+    // Saying "nothing found" while holding a list of real balances the owner
+    // cannot reach from here would be the same lie as reporting $0 on a wallet
+    // whose fees sit in a contract.
+    out.push(
+      report.unreachable.length > 0
+        ? "Nothing claimable from the address(es) you scanned — but see below."
+        : "No unclaimed value found.",
+    );
   } else {
     const groups: [string, ScanReport["items"]][] = [
       ["Auto-claimable now", report.items.filter((i) => i.claimType === "permissionless")],
@@ -47,6 +54,30 @@ export function renderReport(report: ScanReport): string {
     out.push(
       `Total (priced items only): $${report.totals.pricedUsd.toFixed(2)} ` +
         `across ${report.totals.pricedCount} item(s); ${report.totals.unpricedCount} unpriced.`,
+    );
+  }
+
+  if (report.unreachable.length > 0) {
+    out.push("", "Found, but NOT claimable from the address(es) you scanned:");
+    for (const u of report.unreachable) {
+      for (const a of u.amounts) {
+        out.push(
+          `  ${usd(a.usdValue).padStart(12)}  ${formatAmount(a.rawAmount, a.token)} ` +
+            `${a.token.symbol ?? a.token.address}`,
+        );
+      }
+      out.push(`  ${" ".repeat(12)}  held by ${u.holder}`);
+      out.push(
+        `  ${" ".repeat(12)}  ${
+          u.looksControlledByOwner
+            ? `reports you as its owner — collect through that contract`
+            : `owner unknown — these may not be yours`
+        }`,
+      );
+    }
+    out.push(
+      "",
+      "  (excluded from the total above: this tool cannot build a transaction the holder would accept)",
     );
   }
 

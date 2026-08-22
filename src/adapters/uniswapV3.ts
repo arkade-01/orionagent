@@ -108,11 +108,30 @@ export class UniswapV3Adapter implements SourceAdapter {
   }
 
   async scan(ctx: ScanContext): Promise<{ items: UnclaimedItem[]; notes?: SourceNote[] }> {
+    // Stated on every scan, including empty ones — "no LP fees" is exactly the
+    // answer a reader would otherwise take as complete.
+    //
+    // `balanceOf`/`tokenOfOwnerByIndex` see positions this address holds. A
+    // position transferred to a Safe, a personal vault, or an automation
+    // contract is owned by that contract, and `collect` would have to be called
+    // BY it — so those fees are real but not claimable from here, and are
+    // deliberately not listed as if they were.
+    //
+    // Note this does NOT affect EIP-7702 smart accounts: those keep the wallet's
+    // own address, so their positions show up normally.
+    const scopeNote: SourceNote = {
+      source: this.id,
+      message:
+        "Covers Uniswap v3 positions held directly by this address. Positions moved to a Safe, " +
+        "a personal vault, or an automation contract belong to that contract and are not " +
+        "included — pass those addresses with --also to scan them too.",
+    };
+
     const tokenIds = await this.listTokenIds(ctx);
-    if (tokenIds.length === 0) return { items: [] };
+    if (tokenIds.length === 0) return { items: [], notes: [scopeNote] };
 
     const owed = await this.readOwed(ctx, tokenIds);
-    if (owed.length === 0) return { items: [] };
+    if (owed.length === 0) return { items: [], notes: [scopeNote] };
 
     const tokenInfo = await loadTokenInfo(
       this.client,
@@ -161,7 +180,7 @@ export class UniswapV3Adapter implements SourceAdapter {
       }
     }
 
-    return { items };
+    return { items, notes: [scopeNote] };
   }
 
   async buildClaim(ctx: ScanContext, items: UnclaimedItem[]): Promise<ClaimTx[]> {

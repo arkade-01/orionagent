@@ -35,11 +35,20 @@ export async function startAnvil(blockNumber?: bigint): Promise<ChildProcess | n
   } catch {
     return null;
   }
+
+  // spawn reports a missing binary asynchronously via an 'error' event, not by
+  // throwing. Without this the poll loop below waits the full 60s to discover
+  // that anvil was never installed.
+  let spawnFailed = false;
+  child.once("error", () => {
+    spawnFailed = true;
+  });
   if (child.exitCode !== null) return null;
 
   const client = createPublicClient({ chain: base, transport: http(ANVIL_URL, { timeout: 120_000 }) });
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
+    if (spawnFailed || child.exitCode !== null) return null;
     try {
       await client.getBlockNumber();
       return child;

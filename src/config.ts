@@ -59,6 +59,19 @@ export const CLANKER_BASELINE_CURRENCIES = [
   "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", // USDC
 ] as const satisfies readonly Address[];
 
+/**
+ * Block the ClankerFeeLocker was deployed at — the earliest a `StoreTokens`
+ * event can exist, and therefore the start of any complete history scan.
+ * Established by binary-searching `eth_getCode` on Base.
+ */
+export const CLANKER_FEE_LOCKER_DEPLOY_BLOCK = 31_526_701n;
+
+/**
+ * Blocks per `eth_getLogs` request. Providers cap this — the public Base RPC
+ * rejects anything above 10k outright, even with an indexed topic filter.
+ */
+export const LOG_WINDOW_BLOCKS = 10_000n;
+
 /** uint128 max — the "collect everything" sentinel for Uniswap v3 `collect`. */
 export const UINT128_MAX = (1n << 128n) - 1n;
 

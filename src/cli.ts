@@ -5,7 +5,7 @@ import { chainScanClanker } from "./chainscan.js";
 import { createAgentWallet, createBaseClient, assertBaseChain } from "./chain.js";
 import { executePermissionless, toOwnerSignRequests } from "./claims.js";
 import { loadConfig } from "./config.js";
-import { buildClaimPlan, scanWallet, type EngineOptions } from "./engine.js";
+import { buildClaimPlan, scanWallets, type EngineOptions } from "./engine.js";
 import { renderChainScan, renderClaimPlan, renderReport, toJson } from "./format.js";
 import type { SourceId } from "./types.js";
 
@@ -14,8 +14,13 @@ interface Flags {
   brief: boolean;
   execute: boolean;
   includePending: boolean;
+  deep: boolean;
+  noCache: boolean;
+  concurrency?: number;
   sources?: SourceId[];
   tokens: Address[];
+  also: Address[];
+  findMoved: boolean;
   minUsd?: number;
   lookback?: bigint;
   maxPairs?: number;
@@ -35,7 +40,19 @@ Options
                         never submitted.
   --source <id>         Restrict to clanker | merkl | uniswap-v3 (repeatable)
   --token <address>     Extra Clanker token to check (repeatable)
+  --also <address>      Also scan this address as an owner (repeatable). Use it
+                        for a Safe, smart account, or vault you control — its
+                        Uniswap positions and Clanker fees are owned by IT, not
+                        by your EOA, and are invisible otherwise.
+  --find-moved          Look for Uniswap positions this wallet transferred into
+                        a contract. Reported separately as unreachable: the fees
+                        are real, but only the holder can collect them.
   --include-pending     Probe pool-side Clanker fees (needs eth_simulateV1)
+  --deep                Walk FeeLocker history for every currency this wallet
+                        has ever earned in. The only complete Clanker answer;
+                        wants an RPC that tolerates ~1900 eth_getLogs calls.
+  --no-cache            Ignore the cached resume point and rescan from scratch
+  --concurrency <n>     Parallel log requests during --deep (default 12)
   --min-usd <n>         chainscan only: minimum USD to report
   --lookback <blocks>   chainscan only: how far back to look for fee accrual
                         (default 20000, ~11h on Base)
@@ -49,7 +66,11 @@ function parseFlags(argv: string[]): { positional: string[]; flags: Flags } {
     brief: false,
     execute: false,
     includePending: false,
+    deep: false,
+    noCache: false,
     tokens: [],
+    also: [],
+    findMoved: false,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -59,8 +80,13 @@ function parseFlags(argv: string[]): { positional: string[]; flags: Flags } {
       case "--brief": flags.brief = true; break;
       case "--execute": flags.execute = true; break;
       case "--include-pending": flags.includePending = true; break;
+      case "--deep": flags.deep = true; break;
+      case "--no-cache": flags.noCache = true; break;
+      case "--concurrency": flags.concurrency = Number(argv[++i]); break;
       case "--source": (flags.sources ??= []).push(argv[++i] as SourceId); break;
       case "--token": flags.tokens.push(getAddress(argv[++i]!)); break;
+      case "--also": flags.also.push(getAddress(argv[++i]!)); break;
+      case "--find-moved": flags.findMoved = true; break;
       case "--min-usd": flags.minUsd = Number(argv[++i]); break;
       case "--lookback": flags.lookback = BigInt(argv[++i]!); break;
       case "--max-pairs": flags.maxPairs = Number(argv[++i]); break;
@@ -75,8 +101,27 @@ function parseFlags(argv: string[]): { positional: string[]; flags: Flags } {
 function engineOptions(flags: Flags, agentAddress?: Address): EngineOptions {
   return {
     sources: flags.sources,
-    clanker: { tokens: flags.tokens, includePending: flags.includePending },
+    clanker: {
+      tokens: flags.tokens,
+      includePending: flags.includePending,
+      deep: flags.deep,
+      useCache: !flags.noCache,
+      ...(flags.concurrency ? { deepConcurrency: flags.concurrency } : {}),
+      ...(flags.deep && !flags.json
+        ? {
+            onDeepProgress: (done: number, total: number, failed: number) => {
+              if (done % 200 === 0 || done === total) {
+                process.stderr.write(
+                  `\r  deep scan ${done}/${total} windows${failed > 0 ? `, ${failed} failed` : ""}   `,
+                );
+              }
+              if (done === total) process.stderr.write("\n");
+            },
+          }
+        : {}),
+    },
     agentAddress,
+    findMoved: flags.findMoved,
   };
 }
 
@@ -91,7 +136,7 @@ async function main(): Promise<number> {
 
   const { rpcUrl } = loadConfig();
   const client = createBaseClient(rpcUrl);
-  await assertBaseChain(client);
+  await assertBaseChain(client, rpcUrl);
 
   if (command === "chainscan") {
     const result = await chainScanClanker(client, {
@@ -117,7 +162,7 @@ async function main(): Promise<number> {
   // than assuming, so resolve it even when we are not going to send anything.
   const agent = createAgentWallet(rpcUrl);
   const options = engineOptions(flags, agent?.account?.address);
-  const report = await scanWallet(client, owner, options);
+  const report = await scanWallets(client, [owner, ...flags.also], options);
 
   if (command === "scan") {
     console.log(flags.json ? toJson(report) : renderReport(report));

@@ -1,7 +1,14 @@
 export * from "./types.js";
 export { ADDRESSES, API, BASE_CHAIN_ID, MONETIZATION, loadConfig } from "./config.js";
 export { createBaseClient, createAgentWallet, assertBaseChain } from "./chain.js";
-export { scanWallet, buildClaimPlan, buildAdapters, groupByClaimType, type EngineOptions } from "./engine.js";
+export {
+  scanWallet,
+  scanWallets,
+  buildClaimPlan,
+  buildAdapters,
+  groupByClaimType,
+  type EngineOptions,
+} from "./engine.js";
 export { executePermissionless, toOwnerSignRequests, type ExecutionResult } from "./claims.js";
 export { chainScanClanker, type ChainScanResult, type Lead } from "./chainscan.js";
 export { ClankerAdapter, type ClankerAdapterOptions } from "./adapters/clanker.js";

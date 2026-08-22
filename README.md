@@ -26,6 +26,70 @@ pnpm dev chainscan                     # rank Clanker creators sitting on fees
 `AGENT_PRIVATE_KEY`. That key pays gas; where the funds land is fixed by the contracts, not by us.
 Owner-sign transactions are never submitted.
 
+## Surfaces
+
+One capability registry (`src/registry.ts`), several front-ends. Each capability is declared once
+with a schema and a **risk class**, so the agent path and the CLI path cannot drift apart:
+
+| Capability | Class | MCP | CLI |
+|---|---|---|---|
+| `scan_wallet` | read | yes | yes |
+| `chain_scan` | read | yes | yes |
+| `build_claim_plan` | build — returns unsigned txs | yes | yes |
+| `execute_permissionless` | **spend** | **no** | yes only |
+
+`agentCapabilities()` filters out `spend`, so no agent surface can broadcast a transaction —
+not by configuration, by construction. There is no signer behind the MCP server, so the worst a
+confused or compromised agent can do is read public data and hand back calldata a human still has
+to sign. A test asserts that a `spend` capability added to the registry stays unexposed.
+
+### HTTP API
+
+```bash
+pnpm serve            # http://localhost:8787
+```
+
+Routes are generated from the registry, so there is no `execute` endpoint to find — the API has
+no signer at all. It returns unsigned calldata; the browser wallet signs. A compromised server can
+lie about what you are owed, but it cannot move anything.
+
+| Route | |
+|---|---|
+| `GET /api/health` | liveness + chain id |
+| `GET /api/capabilities` | what this server exposes, and whether deep scans are enabled |
+| `POST /api/scan_wallet` | `{ address, deep?, sources? }` |
+| `POST /api/build_claim_plan` | `{ address, deep?, sources? }` → unsigned txs |
+| `POST /api/chain_scan` | `{ lookbackBlocks?, minUsd?, maxPairs? }` |
+
+Failures return **502 with an explicit "this is not a finding that the wallet is empty"** rather
+than an empty result, so a UI cannot render a read failure as "you are owed nothing".
+
+Environment:
+
+- `PORT` — default 8787
+- `ORIONSCOPE_ALLOW_DEEP=false` — refuse `deep: true` from HTTP callers. A deep scan is ~1900 RPC
+  requests, which on a public deployment is an unauthenticated way to burn your RPC budget. On by
+  default locally, worth turning off before exposing the API.
+- `ORIONSCOPE_CORS_ORIGINS` — comma-separated allowed origins. Same-origin only when unset.
+
+### MCP server
+
+```bash
+claude mcp add orionscope -- npx tsx --env-file-if-exists=.env <abs-path>/src/mcp/server.ts
+```
+
+Then ask in plain language: *"what is 0x605e… owed on Base?"*
+
+The server reads `BASE_RPC_URL` from `.env` itself rather than from the launching shell — MCP
+clients pass only a minimal environment to the subprocess, so a shell-exported variable will not
+reach it.
+
+Smoke-test a real stdio launch (catches shebang, wiring, and anything polluting stdout):
+
+```bash
+node scripts/mcp-smoke.mjs [address]
+```
+
 ## What it reads, and how
 
 | Source | Read | Claim | Type |
@@ -117,6 +181,36 @@ All reads in one scan pin to the same block, so the report is a single coherent 
 | The brief only narrates | `agent/brief.ts` — every number the model emits must appear verbatim in the facts, or the brief is discarded for the deterministic one |
 | Merkl proofs are never cached | `MerklAdapter.buildClaim` refetches; a unit test asserts the second fetch happens |
 | Uniswap owed comes from a static call | `UniswapV3Adapter` static-calls `collect`; `positions().tokensOwed` is read only for the pair, and a fork test asserts it under-reports |
+
+### Complete Clanker discovery (`--deep`)
+
+A fast scan finds Clanker currencies from a baseline set (WETH, USDC) plus the pools of tokens the
+wallet deployed. That is incomplete by construction: fees accrue in **both** sides of a pool, and
+the FeeLocker is keyed on `(feeOwner, currency)` — so a wallet earns in the tokens of deploys it
+never made and that no index links back to it. One real wallet had balances in five currencies;
+the fast scan sees one.
+
+`--deep` walks `StoreTokens` history filtered on the indexed `feeOwner` topic, which answers
+"every currency this owner has ever been paid in" exactly. It costs one `eth_getLogs` per 10k
+blocks — about 1,900 requests over the FeeLocker's history.
+
+**It wants a real RPC.** On `mainnet.base.org`, 91% of those windows fail to rate limiting. That is
+why partial results are a first-class outcome rather than an exception: any window that fails after
+its retries makes the scan report itself incomplete and say how much it missed. A version that
+swallowed those failures would return five confident currencies out of an unknown larger set — the
+same phantom-zero bug in better disguise.
+
+Repeat scans are cheap. The watermark — the highest block with an unbroken run of successful
+windows behind it — is cached per owner under `~/.orionscope/` (override with
+`ORIONSCOPE_CACHE_DIR`), so the next scan walks only the new tail. The watermark deliberately stops
+at the *first* gap rather than the last success: caching past a gap would mean the missed window is
+never revisited.
+
+```bash
+pnpm dev scan 0xYourWallet --deep                  # complete, resumable
+pnpm dev scan 0xYourWallet --deep --no-cache       # ignore the watermark, rescan all history
+pnpm dev scan 0xYourWallet --deep --concurrency 20 # push a paid RPC harder
+```
 
 ### Pending vs harvested Clanker fees
 

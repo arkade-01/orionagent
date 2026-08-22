@@ -108,6 +108,30 @@ export interface SourceNote {
   message: string;
 }
 
+/**
+ * Value that demonstrably exists but cannot be claimed from any address we were
+ * asked about — a Uniswap position sitting in a Safe or an automation contract,
+ * for instance.
+ *
+ * These are deliberately NOT `UnclaimedItem`s. `collect` has to be called by the
+ * NFT's holder, so we cannot build a transaction that works, and listing them
+ * as claimable would promise money the tool cannot deliver. They are reported
+ * so the owner knows where to look, and excluded from every total.
+ */
+export interface UnreachableValue {
+  source: SourceId;
+  /** The contract that actually holds the position. */
+  holder: Address;
+  /** What the holder reports via `owner()` / `getOwners()`, when it exposes one. */
+  holderOwner: Address | null;
+  /** True when `holderOwner` is one of the addresses we were asked to scan. */
+  looksControlledByOwner: boolean;
+  label: string;
+  /** Real amounts, read the same way a claimable item's would be. */
+  amounts: { token: TokenInfo; rawAmount: bigint; usdValue: number | null }[];
+  provenance: Provenance[];
+}
+
 export interface ScanReport {
   owner: Address;
   chainId: number;
@@ -125,6 +149,8 @@ export interface ScanReport {
   };
   errors: SourceError[];
   notes: SourceNote[];
+  /** Found, real, but not claimable from the scanned addresses. Never in totals. */
+  unreachable: UnreachableValue[];
 }
 
 export interface ScanContext {

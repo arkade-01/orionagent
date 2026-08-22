@@ -55,6 +55,7 @@ const report: ScanReport = {
   totals: { pricedUsd: 10083.61, pricedCount: 1, unpricedCount: 1, itemCount: 2 },
   errors: [],
   notes: [],
+  unreachable: [],
 };
 
 describe("brief facts", () => {

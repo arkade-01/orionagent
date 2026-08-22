@@ -77,7 +77,11 @@ it IS permissionless.
   Note fees accrue in BOTH pool currencies and the locker is keyed on `(feeOwner, currency)`, not on
   the Clanker token — so NEVER let token enumeration decide whether a currency gets probed. Always
   read the baseline currencies for the owner; a wallet can hold a balance earned on deploys no
-  index lists, and gating on "is the owner a recipient of this token" silently reports $0. See **CLANKER.md** for the full mechanics — read it before touching this adapter.
+  index lists, and gating on "is the owner a recipient of this token" silently reports $0.
+  The baseline is still not complete — fees accrue in BOTH pool sides, so an owner earns in tokens
+  they never deployed. `--deep` (src/clankerCurrencies.ts) walks `StoreTokens` on the indexed
+  `feeOwner` topic for the exact answer. Any scan that partially fails MUST report itself
+  incomplete; a silently-partial currency set is the same class of bug as reporting $0. See **CLANKER.md** for the full mechanics — read it before touching this adapter.
 
 ## Claim-type semantics
 

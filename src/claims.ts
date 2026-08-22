@@ -1,8 +1,10 @@
 import type { Hash, PublicClient, WalletClient } from "viem";
+import { summarizeError } from "./errors.js";
 import type { ClaimTx } from "./types.js";
 
 export interface ExecutionResult {
   tx: ClaimTx;
+  /** `skipped` covers both owner-sign txs and ones a pre-flight showed would revert. */
   status: "sent" | "skipped" | "failed";
   hash?: Hash;
   reason?: string;
@@ -26,12 +28,33 @@ export async function executePermissionless(
   if (!account) throw new Error("Agent wallet has no account configured.");
 
   const results: ExecutionResult[] = [];
-  // Sequential: prerequisite sweeps must land before the claim that reads them.
+  // Sequential: prerequisite sweeps must land before the claim that reads them,
+  // and each pre-flight must see the state the previous tx left behind.
   for (const tx of txs) {
     if (tx.claimType !== "permissionless") {
       results.push({ tx, status: "skipped", reason: "owner-sign — returned for the owner to sign" });
       continue;
     }
+
+    // Pre-flight at head. Balances and merkle roots move between the scan and
+    // now; without this, a claim that has since been drained or a proof that has
+    // rotated burns real gas to revert. Simulating costs nothing.
+    try {
+      await publicClient.call({
+        account: account.address,
+        to: tx.to,
+        data: tx.data,
+        value: tx.value,
+      });
+    } catch (err) {
+      results.push({
+        tx,
+        status: "skipped",
+        reason: `would revert, not sent: ${summarizeError(err)}`,
+      });
+      continue;
+    }
+
     try {
       const hash = await wallet.sendTransaction({
         account,
@@ -49,7 +72,7 @@ export async function executePermissionless(
       }
       results.push({ tx, status: "sent", hash });
     } catch (err) {
-      results.push({ tx, status: "failed", reason: (err as Error).message });
+      results.push({ tx, status: "failed", reason: summarizeError(err) });
     }
   }
   return results;
