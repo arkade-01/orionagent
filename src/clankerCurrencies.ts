@@ -132,7 +132,12 @@ export async function discoverFeeCurrencies(
     );
   };
 
-  const MAX_SPLIT_DEPTH = 8;
+  /**
+   * 5 takes a 10k window down to ~312 blocks, which has been enough. Deeper
+   * mostly buys a long silent tail: each level doubles the request count, and a
+   * window is only reported once every piece of it is done.
+   */
+  const MAX_SPLIT_DEPTH = 5;
 
   const readRange = async (from: bigint, to: bigint, depth = 0): Promise<void> => {
     try {
@@ -149,9 +154,12 @@ export async function discoverFeeCurrencies(
       }
     } catch (err) {
       if (isTooLarge(err) && to > from && depth < MAX_SPLIT_DEPTH) {
+        // In parallel, not one after the other. Sequential halves made a single
+        // oversized window take hundreds of round trips, and since a window
+        // reports progress only when it finishes, the whole scan appeared to
+        // freeze at 98% while it ground through them.
         const mid = from + (to - from) / 2n;
-        await readRange(from, mid, depth + 1);
-        await readRange(mid + 1n, to, depth + 1);
+        await Promise.all([readRange(from, mid, depth + 1), readRange(mid + 1n, to, depth + 1)]);
         return;
       }
       throw err;
