@@ -11,6 +11,25 @@ The property that makes the report worth reading: **every figure in it traces to
 read or API call**, recorded in the item's `provenance`. Nothing is estimated, and a token with
 no trustworthy price is reported as `unpriced` rather than given a number.
 
+## Try it without installing anything
+
+**[orionscope.io/scan](https://www.orionscope.io/scan)** — paste an address, watch each source get
+checked, expand any result to the contract call behind it, and claim with your own wallet.
+
+The site is this engine behind a web front-end; its source is in
+[`orionscope`](https://github.com/arkade-01/orionscope). Nothing there holds a private key — the
+server returns unsigned transactions and the browser wallet signs them.
+
+`0x605Ee83d2F050cF4dA6035d8f6185CE5A3934504` is a live wallet worth scanning: the quick scan finds
+one balance, the full history scan finds nine. Both are verifiable against the chain yourself:
+
+```bash
+cast call 0xF3622742b1E446D92e45E22923Ef11C2fcD55D68 \
+  "availableFees(address,address)(uint256)" \
+  0x605Ee83d2F050cF4dA6035d8f6185CE5A3934504 \
+  0x4200000000000000000000000000000000000006 --rpc-url https://mainnet.base.org
+```
+
 ## Quick start
 
 ```bash
@@ -26,22 +45,30 @@ pnpm dev chainscan                     # rank Clanker creators sitting on fees
 `AGENT_PRIVATE_KEY`. That key pays gas; where the funds land is fixed by the contracts, not by us.
 Owner-sign transactions are never submitted.
 
+## The files in this repo
+
+| | |
+|---|---|
+| `README.md` | this — what the engine does and how to run it |
+| `CLANKER.md` | mechanics of the Clanker source: contracts, fee model, enumeration, the open questions closed on a fork |
+| `CLAUDE.md` | working notes and invariants for coding agents on this repo. Internal; not product documentation |
+
 ## Surfaces
 
 One capability registry (`src/registry.ts`), several front-ends. Each capability is declared once
 with a schema and a **risk class**, so the agent path and the CLI path cannot drift apart:
 
-| Capability | Class | MCP | CLI |
-|---|---|---|---|
-| `scan_wallet` | read | yes | yes |
-| `chain_scan` | read | yes | yes |
-| `build_claim_plan` | build — returns unsigned txs | yes | yes |
-| `execute_permissionless` | **spend** | **no** | yes only |
+| Capability | Class | Web | MCP | CLI |
+|---|---|---|---|---|
+| `scan_wallet` | read | yes | yes | yes |
+| `chain_scan` | read | yes | yes | yes |
+| `build_claim_plan` | build — returns unsigned txs | yes | yes | yes |
+| `execute_permissionless` | **spend** | **no** | **no** | yes only |
 
 `agentCapabilities()` filters out `spend`, so no agent surface can broadcast a transaction —
-not by configuration, by construction. There is no signer behind the MCP server, so the worst a
-confused or compromised agent can do is read public data and hand back calldata a human still has
-to sign. A test asserts that a `spend` capability added to the registry stays unexposed.
+not by configuration, by construction. There is no signer behind the MCP server or the website, so
+the worst a confused or compromised one can do is read public data and hand back calldata a human
+still has to sign. A test asserts that a `spend` capability added to the registry stays unexposed.
 
 ### HTTP API
 
