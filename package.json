@@ -2,6 +2,7 @@
   "name": "@orionscope/engine",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@11.22.0",
   "type": "module",
   "description": "Non-custodial agent that finds and reclaims unclaimed on-chain value on Base.",
   "bin": {
