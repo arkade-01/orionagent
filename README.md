@@ -212,6 +212,40 @@ pnpm dev scan 0xYourWallet --deep --no-cache       # ignore the watermark, resca
 pnpm dev scan 0xYourWallet --deep --concurrency 20 # push a paid RPC harder
 ```
 
+### Positions a wallet cannot see (`--also`, `--find-moved`)
+
+A Uniswap position moved into a Safe, a personal vault, or an automation contract is owned by
+that contract. `collect` has to be called by the holder, so those fees are invisible to a scan of
+the human's wallet — and not claimable from it either. Measured on Base, roughly 45% of live
+positions are contract-held, most of them per-user rather than pooled, so this is real money a
+wallet-only scan misses.
+
+Which contracts a person controls is not decidable from chain data, so the caller names them:
+
+```bash
+pnpm dev scan 0xYourEOA --also 0xYourSafe --also 0xYourVault
+```
+
+Addresses are scanned together, pinned to one block, and each item records the owner that must
+sign to claim it.
+
+`--find-moved` handles the rest: it walks the position manager's `Transfer` events for positions
+this wallet sent away, checks who holds them now, and static-calls `collect` **as the holder** to
+read the real owed amounts.
+
+```bash
+pnpm dev scan 0xYourWallet --find-moved
+```
+
+These come back as `unreachable` rather than as claimable items, and are excluded from every
+total. `collect` must come from the holder and whether a given contract exposes a path to do that
+is contract-specific, so no working transaction can be built — listing them as claimable would
+promise money the tool cannot produce. When the holder's `owner()` names the scanned wallet, the
+report says so, as a hint and explicitly not as proof of a claim path.
+
+A scan with zero claimable items but non-empty `unreachable` does not say "no unclaimed value
+found", because that would be false.
+
 ### Pending vs harvested Clanker fees
 
 `availableFees` reports only what has been *harvested* into the FeeLocker — `storeFees` is gated on
