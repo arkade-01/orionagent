@@ -289,14 +289,8 @@ degrade to harvested-only, with a note saying so.
 120 unit tests (no network required) plus fork tests against Base mainnet.
 
 ```bash
-pnpm test:unit    # 120 tests, ~2s, no RPC needed
+pnpm test:unit    # 120 tests, ~2s, no network
 pnpm test         # the above plus Base-fork tests (needs anvil + BASE_RPC_URL)
-```
-
-
-```bash
-pnpm test                       # unit tests + Base-fork tests
-npx vitest run test/unit        # unit only, no RPC needed
 ```
 
 Fork tests boot Anvil against `FORK_RPC_URL` (or `BASE_RPC_URL`) and skip themselves when neither
