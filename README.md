@@ -138,9 +138,11 @@ node scripts/mcp-smoke.mjs [address]
 Every ABI in `src/abis/` was taken from the verified source on Base, not hand-written. Each file
 records the specific properties the adapters depend on.
 
-## Five corrections to the original spec
+## Five things the spec got wrong
 
-Both came out of reading verified source, and both are covered by fork tests.
+Each of these was found by reading verified contract source or testing against live chain data,
+and each is covered by a fork test. They are listed because they are the substance of the work:
+the difference between a scanner that looks right and one that is right.
 
 **1. Merkl is not permissionless.** `claim` credits `users[i]` rather than the caller, which looks
 permissionless, but the Distributor reverts `NotWhitelisted()` unless the caller is the user, is
@@ -284,9 +286,11 @@ degrade to harvested-only, with a note saying so.
 
 ## Testing
 
+120 unit tests (no network required) plus fork tests against Base mainnet.
+
 ```bash
-pnpm test                       # unit tests + Base-fork tests
-npx vitest run test/unit        # unit only, no RPC needed
+pnpm test:unit    # 120 tests, ~2s, no network
+pnpm test         # the above plus Base-fork tests (needs anvil + BASE_RPC_URL)
 ```
 
 Fork tests boot Anvil against `FORK_RPC_URL` (or `BASE_RPC_URL`) and skip themselves when neither
@@ -306,8 +310,20 @@ outcomes; they print the reason and report as skipped rather than hiding behind 
 The public Base RPC rate-limits often enough that a run with a few skips is normal — point
 `BASE_RPC_URL` at a paid endpoint for a clean run.
 
-## Scope
+## What is in scope, and what is not
 
-v1 is these three adapters, wallet-scan, and the Clanker chain-scan. No Aerodrome, airdrop, or
-vesting adapters, and no fee splitter — monetization is the `MONETIZATION` constant in
-`src/config.ts` and nothing in the claim path reads it.
+Three adapters (Clanker, Merkl, Uniswap v3), wallet scanning, and the Clanker chain-scan. No
+Aerodrome, airdrop, or vesting adapters yet.
+
+No fee is taken. `MONETIZATION` in `src/config.ts` is a constant set to zero and nothing in the
+claim path reads it, so there is no splitter to trust and nothing skimmed from a claim.
+
+Known limits, stated rather than hidden:
+
+- **A zero result is the weakest output.** Non-zero amounts have matched the contract to the wei
+  every time they were checked. "Nothing found" is a hypothesis — twice during development it was
+  wrong, once by $37k.
+- **Merkl completeness cannot be guaranteed.** Its merkle tree is off-chain; if their API omits an
+  entitlement, nothing on-chain contradicts it.
+- **Uniswap sees positions held directly**, plus any address passed with `--also`, plus moved
+  positions found by `--find-moved`. A position in a pooled vault belongs to the vault.
